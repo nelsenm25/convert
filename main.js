@@ -158,9 +158,10 @@ async function attemptConvertPath (inputFile, path) {
 
 }
 
-async function buildConvertPath (file, target, path = []) {
+async function buildConvertPath (file, target, queue) {
 
-  if (path.length >= 3) return null;
+  const path = queue.shift();
+  if (path.length > 5) return null;
 
   console.log("Trying", path.map(c => c.format.mime));
 
@@ -169,7 +170,8 @@ async function buildConvertPath (file, target, path = []) {
   // Check if the target supports parsing *from* the previous node's format
   if (target.handler.supportedFormats.some(c => c.mime === previous.format.mime && c.from)) {
     path.push(target);
-    return await attemptConvertPath(file, path);
+    const attempt = await attemptConvertPath(file, path);
+    if (attempt) return attempt;
   }
 
   // Get handlers that support *taking in* the previous format
@@ -187,12 +189,11 @@ async function buildConvertPath (file, target, path = []) {
       if (!format.to) continue;
       if (!format.mime) continue;
       if (path.some(c => c.format === format)) continue;
-      const attempt = await buildConvertPath(file, target, path.concat({ format, handler }));
-      if (attempt) return attempt;
+      queue.push(path.concat({ format, handler }));
     }
   }
 
-  return null;
+  return await buildConvertPath(file, target, queue);
 
 }
 
@@ -218,14 +219,14 @@ window.convertSelection = async function () {
 
   const inputFileData = { name: inputFile.name, bytes: inputBytes };
 
-  const output = await buildConvertPath(inputFileData, outputOption, [inputOption]);
+  const output = await buildConvertPath(inputFileData, outputOption, [[inputOption]]);
   if (!output) return alert("Failed to find conversion route.");
 
   const outputFormat = outputOption.format;
 
   const blob = new Blob([output.file.bytes], { type: outputFormat.mime });
   const link = document.createElement("a");
-  link.href = window.URL.createObjectURL(blob);
+  link.href = URL.createObjectURL(blob);
   link.download = output.file.name;
   link.click();
 
