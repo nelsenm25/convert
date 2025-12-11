@@ -80,7 +80,7 @@ async function init () {
    *
    * I'm guessing that "svgz" is used to imply that this isn't a "natural"
    * SVG. However, in our case, we're not aiming for anything more than
-   * that in the majorify of cases.
+   * that in the majority of cases.
    */
   const svgzFormat = supportedFormats.find(c => c.format === "svgz");
   svgzFormat.name = "Scalable Vector Graphics";
