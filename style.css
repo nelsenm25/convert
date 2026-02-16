@@ -25,6 +25,21 @@ body {
   margin: 5px;
 }
 
+.file-meta {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.file-list-preview {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  max-width: 80%;
+  margin: 4px auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 #side-panel {
   position: absolute;
   top: 0;
@@ -118,17 +133,54 @@ button.selected {
   font-weight: bold;
 }
 
-#convert-button {
+#convert-area {
   position: fixed;
   left: 50%;
   bottom: 5%;
   transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 10;
+}
+
+#convert-button {
   font-size: 1.5rem;
   padding: 10px 20px;
   border: 0;
   border-radius: 10px;
   background-color: var(--highlight-color);
   color: white;
+  cursor: pointer;
+}
+
+#zip-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: white;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  white-space: nowrap;
+  user-select: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+#zip-option:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+#zip-option.hidden {
+  display: none;
+}
+#zip-option input[type="checkbox"] {
+  accent-color: var(--highlight-color);
+  width: 16px;
+  height: 16px;
   cursor: pointer;
 }
 
