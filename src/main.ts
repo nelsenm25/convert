@@ -1,6 +1,12 @@
-import type { FileFormat, FileData, FormatHandler, ConvertPathNode } from "./FormatHandler.js";
+import type {
+  FileFormat,
+  FileData,
+  FormatHandler,
+  ConvertPathNode,
+} from "./FormatHandler.js";
 import normalizeMimeType from "./normalizeMimeType.js";
 import handlers from "./handlers";
+import JSZip from "jszip";
 
 /** Files currently selected for conversion */
 let selectedFiles: File[] = [];
@@ -22,7 +28,9 @@ const ui = {
   inputSearch: document.querySelector("#search-from") as HTMLInputElement,
   outputSearch: document.querySelector("#search-to") as HTMLInputElement,
   popupBox: document.querySelector("#popup") as HTMLDivElement,
-  popupBackground: document.querySelector("#popup-bg") as HTMLDivElement
+  popupBackground: document.querySelector("#popup-bg") as HTMLDivElement,
+  zipToggle: document.querySelector("#zip-toggle") as HTMLInputElement,
+  zipOption: document.querySelector("#zip-option") as HTMLLabelElement,
 };
 
 /**
@@ -46,7 +54,7 @@ const filterButtonList = (list: HTMLDivElement, string: string) => {
       button.style.display = "";
     }
   }
-}
+};
 
 /**
  * Handles search box input by filtering its parent container.
@@ -79,7 +87,6 @@ ui.fileSelectArea.onclick = () => {
  * or a "drop" event.
  */
 const fileSelectHandler = (event: Event) => {
-
   let inputFiles;
 
   if (event instanceof DragEvent) {
@@ -97,22 +104,38 @@ const fileSelectHandler = (event: Event) => {
   const files = Array.from(inputFiles);
   if (files.length === 0) return;
 
-  if (files.some(c => c.type !== files[0].type)) {
+  if (files.some((c) => c.type !== files[0].type)) {
     return alert("All input files must be of the same type.");
   }
-  files.sort((a, b) => a.name === b.name ? 0 : (a.name < b.name ? -1 : 1));
+  files.sort((a, b) => (a.name === b.name ? 0 : a.name < b.name ? -1 : 1));
   selectedFiles = files;
 
-  ui.fileSelectArea.innerHTML = `<h2>
-    ${files[0].name}
-    ${files.length > 1 ? `<br>... and ${files.length - 1} more` : ""}
-  </h2>`;
+  if (files.length === 1) {
+    ui.fileSelectArea.innerHTML = `<h2>${files[0].name}</h2>
+      <p class="file-meta">${(files[0].size / 1024).toFixed(1)} KB · ${files[0].type || "unknown type"}</p>`;
+    ui.zipOption.classList.add("hidden");
+  } else {
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    const sizeStr =
+      totalSize > 1048576
+        ? (totalSize / 1048576).toFixed(1) + " MB"
+        : (totalSize / 1024).toFixed(1) + " KB";
+    ui.fileSelectArea.innerHTML = `<h2>${files.length} files selected</h2>
+      <p class="file-meta">${sizeStr} total</p>
+      <p class="file-list-preview">${files
+        .slice(0, 5)
+        .map((f) => f.name)
+        .join(
+          ", ",
+        )}${files.length > 5 ? `, +${files.length - 5} more` : ""}</p>`;
+    ui.zipOption.classList.remove("hidden");
+  }
 
   // Common MIME type adjustments (to match "mime" library)
   let mimeType = normalizeMimeType(files[0].type);
 
   // Find a button matching the input MIME type.
-  const buttonMimeType = Array.from(ui.inputList.children).find(button => {
+  const buttonMimeType = Array.from(ui.inputList.children).find((button) => {
     if (!(button instanceof HTMLButtonElement)) return false;
     return button.getAttribute("mime-type") === mimeType;
   });
@@ -127,7 +150,7 @@ const fileSelectHandler = (event: Event) => {
   // Fall back to matching format by file extension if MIME type wasn't found.
   const fileExtension = files[0].name.split(".").pop()?.toLowerCase();
 
-  const buttonExtension = Array.from(ui.inputList.children).find(button => {
+  const buttonExtension = Array.from(ui.inputList.children).find((button) => {
     if (!(button instanceof HTMLButtonElement)) return false;
     const formatIndex = button.getAttribute("format-index");
     if (!formatIndex) return;
@@ -142,14 +165,13 @@ const fileSelectHandler = (event: Event) => {
   }
 
   filterButtonList(ui.inputList, ui.inputSearch.value);
-
 };
 
 // Add the file selection handler to both the file input element and to
 // the window as a drag-and-drop event, and to the clipboard paste event.
 ui.fileInput.addEventListener("change", fileSelectHandler);
 window.addEventListener("drop", fileSelectHandler);
-window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("dragover", (e) => e.preventDefault());
 window.addEventListener("paste", fileSelectHandler);
 
 /**
@@ -160,16 +182,16 @@ window.showPopup = function (html: string) {
   ui.popupBox.innerHTML = html;
   ui.popupBox.style.display = "block";
   ui.popupBackground.style.display = "block";
-}
+};
 /**
  * Hide the on-screen popup.
  */
 window.hidePopup = function () {
   ui.popupBox.style.display = "none";
   ui.popupBackground.style.display = "none";
-}
+};
 
-const allOptions: Array<{ format: FileFormat, handler: FormatHandler }> = [];
+const allOptions: Array<{ format: FileFormat; handler: FormatHandler }> = [];
 
 window.supportedFormatCache = new Map();
 
@@ -179,10 +201,9 @@ window.printSupportedFormatCache = () => {
     entries.push(entry);
   }
   return JSON.stringify(entries, null, 2);
-}
+};
 
-async function buildOptionList () {
-
+async function buildOptionList() {
   allOptions.length = 0;
   ui.inputList.innerHTML = "";
   ui.outputList.innerHTML = "";
@@ -192,7 +213,9 @@ async function buildOptionList () {
       console.warn(`Cache miss for formats of handler "${handler.name}".`);
       try {
         await handler.init();
-      } catch (_) { continue; }
+      } catch (_) {
+        continue;
+      }
       if (handler.supportedFormats) {
         window.supportedFormatCache.set(handler.name, handler.supportedFormats);
         console.info(`Updated supported format cache for "${handler.name}".`);
@@ -204,40 +227,62 @@ async function buildOptionList () {
       continue;
     }
     for (const format of supportedFormats) {
-
       if (!format.mime) continue;
 
       allOptions.push({ format, handler });
 
       // In simple mode, display each input/output format only once
-      let addToInputs = true, addToOutputs = true;
+      let addToInputs = true,
+        addToOutputs = true;
       if (simpleMode) {
-        addToInputs = !Array.from(ui.inputList.children).some(c => {
-          const currFormat = allOptions[parseInt(c.getAttribute("format-index") || "")]?.format;
-          return currFormat?.mime === format.mime && currFormat?.format === format.format;
+        addToInputs = !Array.from(ui.inputList.children).some((c) => {
+          const currFormat =
+            allOptions[parseInt(c.getAttribute("format-index") || "")]?.format;
+          return (
+            currFormat?.mime === format.mime &&
+            currFormat?.format === format.format
+          );
         });
-        addToOutputs = !Array.from(ui.outputList.children).some(c => {
-          const currFormat = allOptions[parseInt(c.getAttribute("format-index") || "")]?.format;
-          return currFormat?.mime === format.mime && currFormat?.format === format.format;
+        addToOutputs = !Array.from(ui.outputList.children).some((c) => {
+          const currFormat =
+            allOptions[parseInt(c.getAttribute("format-index") || "")]?.format;
+          return (
+            currFormat?.mime === format.mime &&
+            currFormat?.format === format.format
+          );
         });
-        if ((!format.from || !addToInputs) && (!format.to || !addToOutputs)) continue;
+        if ((!format.from || !addToInputs) && (!format.to || !addToOutputs))
+          continue;
       }
 
       const newOption = document.createElement("button");
-      newOption.setAttribute("format-index", (allOptions.length - 1).toString());
+      newOption.setAttribute(
+        "format-index",
+        (allOptions.length - 1).toString(),
+      );
       newOption.setAttribute("mime-type", format.mime);
 
       const formatDescriptor = format.format.toUpperCase();
       if (simpleMode) {
         // Hide any handler-specific information in simple mode
         const cleanName = format.name
-          .split("(").join(")").split(")")
+          .split("(")
+          .join(")")
+          .split(")")
           .filter((_, i) => i % 2 === 0)
-          .filter(c => c != "")
+          .filter((c) => c != "")
           .join(" ");
-        newOption.appendChild(document.createTextNode(`${formatDescriptor} - ${cleanName} (${format.mime})`));
+        newOption.appendChild(
+          document.createTextNode(
+            `${formatDescriptor} - ${cleanName} (${format.mime})`,
+          ),
+        );
       } else {
-        newOption.appendChild(document.createTextNode(`${formatDescriptor} - ${format.name} (${format.mime}) ${handler.name}`));
+        newOption.appendChild(
+          document.createTextNode(
+            `${formatDescriptor} - ${format.name} (${format.mime}) ${handler.name}`,
+          ),
+        );
       }
 
       const clickHandler = (event: Event) => {
@@ -264,7 +309,6 @@ async function buildOptionList () {
         clone.onclick = clickHandler;
         ui.outputList.appendChild(clone);
       }
-
     }
   }
 
@@ -272,17 +316,16 @@ async function buildOptionList () {
   filterButtonList(ui.outputList, ui.outputSearch.value);
 
   window.hidePopup();
-
 }
 
 (async () => {
   try {
-    const cacheJSON = await fetch("cache.json").then(r => r.json());
+    const cacheJSON = await fetch("cache.json").then((r) => r.json());
     window.supportedFormatCache = new Map(cacheJSON);
   } catch {
     console.warn(
       "Missing supported format precache.\n\n" +
-      "Consider saving the output of printSupportedFormatCache() to cache.json."
+        "Consider saving the output of printSupportedFormatCache() to cache.json.",
     );
   } finally {
     await buildOptionList();
@@ -303,54 +346,63 @@ ui.modeToggleButton.addEventListener("click", () => {
 });
 
 const convertPathCache: Array<{
-  files: FileData[],
-  node: ConvertPathNode
+  files: FileData[];
+  node: ConvertPathNode;
 }> = [];
 
-async function attemptConvertPath (files: FileData[], path: ConvertPathNode[]) {
-
+async function attemptConvertPath(files: FileData[], path: ConvertPathNode[]) {
   ui.popupBox.innerHTML = `<h2>Finding conversion route...</h2>
-    <p>Trying <b>${path.map(c => c.format.format).join(" → ")}</b>...</p>`;
+    <p>Trying <b>${path.map((c) => c.format.format).join(" → ")}</b>...</p>`;
 
   const cacheLast = convertPathCache.at(-1);
   if (cacheLast) files = cacheLast.files;
 
   const start = cacheLast ? convertPathCache.length : 0;
-  for (let i = start; i < path.length - 1; i ++) {
+  for (let i = start; i < path.length - 1; i++) {
     const handler = path[i + 1].handler;
     try {
       let supportedFormats = window.supportedFormatCache.get(handler.name);
       if (!handler.ready) {
         try {
           await handler.init();
-        } catch (_) { return null; }
+        } catch (_) {
+          return null;
+        }
         if (handler.supportedFormats) {
-          window.supportedFormatCache.set(handler.name, handler.supportedFormats);
+          window.supportedFormatCache.set(
+            handler.name,
+            handler.supportedFormats,
+          );
           supportedFormats = handler.supportedFormats;
         }
       }
-      if (!supportedFormats) throw `Handler "${handler.name}" doesn't support any formats.`;
-      const inputFormat = supportedFormats.find(c => c.mime === path[i].format.mime && c.from)!;
+      if (!supportedFormats)
+        throw `Handler "${handler.name}" doesn't support any formats.`;
+      const inputFormat = supportedFormats.find(
+        (c) => c.mime === path[i].format.mime && c.from,
+      )!;
       files = await handler.doConvert(files, inputFormat, path[i + 1].format);
-      if (files.some(c => !c.bytes.length)) throw "Output is empty.";
+      if (files.some((c) => !c.bytes.length)) throw "Output is empty.";
       convertPathCache.push({ files, node: path[i + 1] });
     } catch (e) {
-      console.log(path.map(c => c.format.format));
-      console.error(handler.name, `${path[i].format.format} → ${path[i + 1].format.format}`, e);
+      console.log(path.map((c) => c.format.format));
+      console.error(
+        handler.name,
+        `${path[i].format.format} → ${path[i + 1].format.format}`,
+        e,
+      );
       return null;
     }
   }
 
   return { files, path };
-
 }
 
-async function buildConvertPath (
+async function buildConvertPath(
   files: FileData[],
   target: ConvertPathNode,
-  queue: ConvertPathNode[][]
+  queue: ConvertPathNode[][],
 ) {
-
   convertPathCache.length = 0;
 
   while (queue.length > 0) {
@@ -358,7 +410,7 @@ async function buildConvertPath (
     if (!path) continue;
     if (path.length > 5) continue;
 
-    for (let i = 1; i < path.length; i ++) {
+    for (let i = 1; i < path.length; i++) {
       if (path[i] !== convertPathCache[i]?.node) {
         convertPathCache.length = i - 1;
         break;
@@ -368,18 +420,19 @@ async function buildConvertPath (
     const previous = path[path.length - 1];
 
     // Get handlers that support *taking in* the previous node's format
-    const validHandlers = handlers.filter(handler => (
-      window.supportedFormatCache.get(handler.name)?.some(format => (
-        format.mime === previous.format.mime &&
-        format.from
-      ))
-    ));
+    const validHandlers = handlers.filter((handler) =>
+      window.supportedFormatCache
+        .get(handler.name)
+        ?.some((format) => format.mime === previous.format.mime && format.from),
+    );
 
     if (simpleMode) {
       // Try *all* supported handlers that output the target format
-      const candidates = allOptions.filter(opt =>
-        validHandlers.includes(opt.handler) &&
-        opt.format.mime === target.format.mime && opt.format.to
+      const candidates = allOptions.filter(
+        (opt) =>
+          validHandlers.includes(opt.handler) &&
+          opt.format.mime === target.format.mime &&
+          opt.format.to,
       );
       for (const candidate of candidates) {
         const attempt = await attemptConvertPath(files, path.concat(candidate));
@@ -400,17 +453,16 @@ async function buildConvertPath (
       for (const format of supportedFormats) {
         if (!format.to) continue;
         if (!format.mime) continue;
-        if (path.some(c => c.format === format)) continue;
+        if (path.some((c) => c.format === format)) continue;
         queue.push(path.concat({ format, handler }));
       }
     }
   }
 
   return null;
-
 }
 
-function downloadFile (bytes: Uint8Array, name: string, mime: string) {
+function downloadFile(bytes: Uint8Array, name: string, mime: string) {
   const blob = new Blob([bytes as BlobPart], { type: mime });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
@@ -419,7 +471,6 @@ function downloadFile (bytes: Uint8Array, name: string, mime: string) {
 }
 
 ui.convertButton.onclick = async function () {
-
   const inputFiles = selectedFiles;
 
   if (inputFiles.length === 0) {
@@ -432,15 +483,16 @@ ui.convertButton.onclick = async function () {
   const outputButton = document.querySelector("#to-list .selected");
   if (!outputButton) return alert("Specify output file format.");
 
-  const inputOption = allOptions[Number(inputButton.getAttribute("format-index"))];
-  const outputOption = allOptions[Number(outputButton.getAttribute("format-index"))];
+  const inputOption =
+    allOptions[Number(inputButton.getAttribute("format-index"))];
+  const outputOption =
+    allOptions[Number(outputButton.getAttribute("format-index"))];
 
   const inputFormat = inputOption.format;
   const outputFormat = outputOption.format;
 
   try {
-
-    const inputFileData = [];
+    const inputFileData: FileData[] = [];
     for (const inputFile of inputFiles) {
       const inputBuffer = await inputFile.arrayBuffer();
       const inputBytes = new Uint8Array(inputBuffer);
@@ -451,31 +503,74 @@ ui.convertButton.onclick = async function () {
       inputFileData.push({ name: inputFile.name, bytes: inputBytes });
     }
 
-    window.showPopup("<h2>Finding conversion route...</h2>");
+    if (inputFileData.length === 0) return;
 
-    const output = await buildConvertPath(inputFileData, outputOption, [[inputOption]]);
-    if (!output) {
+    const allOutputFiles: FileData[] = [];
+    let usedPath: typeof allOptions[number][] | null = null;
+
+    // Process each file individually so every handler converts one file at a time
+    for (let i = 0; i < inputFileData.length; i++) {
+      const singleFile = [inputFileData[i]];
+
+      window.showPopup(
+        `<h2>Converting file ${i + 1} of ${inputFileData.length}...</h2>` +
+        `<p>${inputFileData[i].name}</p>`
+      );
+
+      const output = await buildConvertPath(singleFile, outputOption, [
+        [inputOption],
+      ]);
+
+      if (!output) {
+        window.hidePopup();
+        alert(`Failed to convert "${inputFileData[i].name}".\nNo conversion route found.`);
+        // Continue with next file instead of aborting everything
+        continue;
+      }
+
+      if (!usedPath) usedPath = output.path;
+
+      for (const file of output.files) {
+        allOutputFiles.push(file);
+      }
+    }
+
+    if (allOutputFiles.length === 0) {
       window.hidePopup();
       alert("Failed to find conversion route.");
       return;
     }
 
-    for (const file of output.files) {
-      downloadFile(file.bytes, file.name, outputFormat.mime);
+    // Download as ZIP or individual files
+    if (allOutputFiles.length > 1 && ui.zipToggle.checked) {
+      window.showPopup(`<h2>Packing ZIP...</h2>`);
+      const zip = new JSZip();
+      for (const file of allOutputFiles) {
+        zip.file(file.name, file.bytes);
+      }
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(zipBlob);
+      link.download = `converted_${outputOption.format.format}.zip`;
+      link.click();
+    } else {
+      for (const file of allOutputFiles) {
+        downloadFile(file.bytes, file.name, outputFormat.mime);
+      }
     }
 
+    const fileCount = allOutputFiles.length;
     window.showPopup(
-      `<h2>Converted ${inputOption.format.format} to ${outputOption.format.format}!</h2>` +
-      `<p>Path used: <b>${output.path.map(c => c.format.format).join(" → ")}</b>.</p>\n` +
-      `<button onclick="window.hidePopup()">OK</button>`
+      `<h2>Converted ${fileCount} file${fileCount > 1 ? "s" : ""}!</h2>` +
+        `<p><b>${inputOption.format.format.toUpperCase()}</b> → <b>${outputOption.format.format.toUpperCase()}</b></p>` +
+        (usedPath
+          ? `<p>Path used: <b>${usedPath.map((c) => c.format.format).join(" → ")}</b>.</p>\n`
+          : "") +
+        `<button onclick="window.hidePopup()">OK</button>`,
     );
-
   } catch (e) {
-
     window.hidePopup();
     alert("Unexpected error while routing:\n" + e);
     console.error(e);
-
   }
-
 };
